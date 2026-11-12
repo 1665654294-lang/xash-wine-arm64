@@ -1,0 +1,81 @@
+name: build-wine-arm64
+
+# 在 arm64 runner 上从源码编出「arm64 Wine + wowbox64.dll」，产物可直接打进 Android APK。
+# 放到你自己仓库的 .github/workflows/ 下即可。
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_id:
+        description: '目标 APK 包名（决定 --prefix，编进 ELF 的路径）'
+        required: true
+        default: 'su.xash.engine'
+      wine_tag:
+        description: 'Wine 源码 tag'
+        required: true
+        default: 'wine-11.21'
+      box64_tag:
+        description: 'box64 源码 tag'
+        required: true
+        default: 'v0.4.4'
+      llvm_mingw_ver:
+        description: 'llvm-mingw release tag'
+        required: true
+        default: '20261104'
+
+jobs:
+  build:
+    # 原生 arm64 runner（public repo 免费额度）。若不可用，改用 ubuntu-latest + docker --platform linux/arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 系统依赖
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            build-essential cmake ninja-build pkg-config curl xz-utils \
+            bison flex gettext autoconf automake libtool \
+            libgnutls28-dev libxml2-dev libxslt1-dev libssl-dev \
+            libosmesa6-dev
+
+      - name: 取 Wine 源码
+        run: |
+          git clone --depth 1 --branch "${{ inputs.wine_tag }}" \
+            https://gitlab.winehq.org/wine/wine.git wine-src
+          # 若用本地打包的源码树，把它放到 wine-src/ 并跳过这一步
+
+      - name: 取 box64 源码
+        run: |
+          git clone --depth 1 --recursive --branch "${{ inputs.box64_tag }}" \
+            https://github.com/ptitSeb/box64.git box64-src
+          # wow64 的 musl 源码在 external/musl，必须 --recursive
+
+      - name: 构建
+        env:
+          APP_ID: ${{ inputs.app_id }}
+          LLVM_MINGW_VER: ${{ inputs.llvm_mingw_ver }}
+          WINE_SRC: ${{ github.workspace }}/wine-src
+          BOX64_SRC: ${{ github.workspace }}/box64-src
+          WORK: ${{ github.workspace }}/build-out
+        run: |
+          chmod +x android-local-hlds/build-wine-arm64.sh
+          bash android-local-hlds/build-wine-arm64.sh
+
+      - name: 产物信息
+        if: always()
+        run: |
+          ls -lh build-out/out/ 2>/dev/null || true
+          find build-out/stage -name 'wowbox64.dll' -exec ls -l {} \; 2>/dev/null || true
+          file build-out/out/*.tar.gz 2>/dev/null || true
+
+      - name: 上传产物
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-arm64-${{ inputs.app_id }}
+          path: build-out/out/*.tar.gz
+          retention-days: 14
